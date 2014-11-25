@@ -1,6 +1,9 @@
 #ifndef BATSTR_H_
 #define BATSTR_H_
 
+#include <gtk/gtk.h>
+#include <gdk/gdk.h>
+#include <cairo/cairo.h>
 #include <stdint.h>
 #include <libudev.h>
 
@@ -133,6 +136,8 @@ struct PowerSupply* PowerSupplySession_GetDeviceBySysPath
 /* Returns the percentage of energe the battery has
  * remaining */
 inline double Battery_FractionFull( struct Battery* bat ) ;
+
+GdkPixbuf* draw_pixbuf( double how_full, double bound_x, double bound_y, gboolean adapter ) ;
 
 #define PowerSupplySession_ForeachDevice( ses, dev ) \
 	size_t garbleddeadbeefsomething5432 = 0; \

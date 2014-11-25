@@ -47,6 +47,9 @@ struct MainApp* main_app = NULL;
 
 void MainApp_UpdateSession ( struct MainApp* app ) ;
 
+/**
+ *  What is called when an adapter is plugged in
+ */
 void Adapter_Callback( struct PowerSupply* ths,
 	struct PowerSupplyEvent* event ) {
 
@@ -57,7 +60,18 @@ void Adapter_Callback( struct PowerSupply* ths,
 	}
 }
 
-void MainApp_UpdateSession ( struct MainApp* app ) {
+char* _voltage_markup( double volts, char* buffer, size_t size ) {
+    snprintf(buffer, size, "<span foreground=\"#00FF00\">%.02fV</span>", volts);
+    return buffer;
+}
+
+char* _power_markup( double watts, char* buffer, size_t size ) {
+    snprintf(buffer, size, "<span foreground=\"#00FF00\">%.02fW</span>", watts);
+    return buffer;
+}
+
+gboolean _main_app_update_session_idle( gpointer _app ) {
+    struct MainApp* app = _app;
 	pthread_mutex_lock( & app->mutex );
 
 	PowerSupplySession_GetDeviceList( app->session );
@@ -74,33 +88,47 @@ void MainApp_UpdateSession ( struct MainApp* app ) {
 	size_t size = 1024;
 
 	char* next = app->tooltip_buffer;
+    nbytes = snprintf(next, size, "<span font-family=\"monospace\">");
+	size -= nbytes;
+	next += nbytes;
+
+    char buf[256];
+    char buf2[256];
 
 	/* Set the state to the lowest possible */
 	app->power_state = PowerState_Empty;
 
 	PowerSupplySession_ForeachDevice( app->session, dev ) {
 		if( dev->type == PowerSupplyType_Adapter ) {
+            /* The device is an adapter. Create the string to reflect 
+             * as such */
 			nbytes = snprintf( next, size, "Adapter %lu: %s\n\n", (unsigned long)nadapters ++,
 				dev->adapter.online ? "Plugged In" : "Unplugged" );
+
 			size -= nbytes;
 			next += nbytes;
 
 			if( dev->adapter.online ) {
+                /* Whether or not the adapter is online or not */
 				app->power_state = PowerState_Charging;
 			}
 
+            /* Attach a callback to it */
 			dev->EventDetected = Adapter_Callback;
 			dev->udef = app;
 		} else if ( dev->type == PowerSupplyType_Battery ) {
 			remaining = Battery_FractionFull( &dev->battery );
-			nbytes = snprintf( next, size, "Battery %lu: %.02f%% Remaining\n"
-				"   %s %s\n    Status: %s\n    Voltage: %.02fV\n    Power: %.02fW\n\n"
+
+            /* Big snprintf */
+			nbytes = snprintf( next, size, "Battery %lu: %.02f%%\n"
+				"   %s %s\n    Status  : %s\n    Voltage : %s\n    Power   : %s\n\n"
 				, (unsigned long) nbatteries ++, remaining * 100,
 				dev->battery.manufacturer,
 				dev->battery.technology,
 				dev->battery.status,
-				dev->battery.voltage / 1000000.0,
-				dev->battery.power_now / 1000000.0 );
+				_voltage_markup(dev->battery.voltage / 1000000.0, buf, sizeof (buf)),
+				_power_markup(dev->battery.power_now / 1000000.0, buf2, sizeof (buf2))
+                );
 
 			total_energy_now += dev->battery.energy_now;
 			total_energy     += dev->battery.energy_full;
@@ -110,40 +138,35 @@ void MainApp_UpdateSession ( struct MainApp* app ) {
 			
 		}
 	}
+
 	remaining = (double)total_energy_now / total_energy ;
-	if( remaining < 0.1 ) {
-		state = PowerState_Empty;
-	} else if ( remaining < 0.35 ) {
-		state = PowerState_Low ;
-	} else if ( remaining < 0.70 ) {
-		state = PowerState_Half;
-	} else if ( remaining < 0.85 ) {
-		state = PowerState_High;
-	} else {
-		state = PowerState_Full;
-	}
 
-	if( state < app->power_state ) {
-		app->power_state = state;
-	}
+	snprintf( next, size, "Total Remaining: %.2f%% </span>", remaining * 100 );
 
-	snprintf( next, size, "Total Remaining: %.2f%%", remaining * 100 );
 
-	gtk_status_icon_set_from_file
-		( app->icon, PowerStateStrings[ app->power_state ] );
-	gtk_status_icon_set_tooltip_text
+    GdkPixbuf* image = draw_pixbuf(remaining, 96, 96, app->power_state == PowerState_Charging);
+    gtk_status_icon_set_from_pixbuf(app->icon, image);
+    g_object_unref(image);
+
+	gtk_status_icon_set_tooltip_markup
 		( app->icon, app->tooltip_buffer );
 
 	pthread_mutex_unlock( & app->mutex );
+
+    return 0;
+}
+
+void MainApp_UpdateSession ( struct MainApp* app ) {
+    gdk_threads_add_idle( _main_app_update_session_idle, app );
 }
 
 void* main_thread( void* __a ) {
 	struct MainApp* app = (struct MainApp*)__a;
 
-	while ( 1 ) {
-		MainApp_UpdateSession( app );
-		sleep( 10 );
-	}
+    while ( 1 ) {
+    	MainApp_UpdateSession( app );
+        sleep( 10 );
+    }
 };
 
 void OnClick( GtkWidget* obj, GdkEventButton * event, gpointer data ) {
